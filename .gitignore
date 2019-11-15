@@ -1,2 +1,4 @@
 crispacuda
+*.offt
+*.tsv
 !profile.sh
