@@ -6,7 +6,7 @@
 const int max_mismatches = 4;
 const int max_on_list = 2000;
 const int max_off_list = 2000;
-const char *seps[2] = { "", ", " };
+const char *seps[3] = { "", ",", ", " };
 
 struct metadata_t {
     uint64_t num_seqs;
@@ -21,6 +21,13 @@ struct crispr_t {
     uint64_t id;
     uint64_t seq;
     uint64_t rev_seq;
+};
+
+struct targets_t {
+    uint64_t off[max_off_list];
+    uint64_t on[max_on_list];
+    int offc;
+    int onc;
 };
 
 struct search_t {

@@ -1,7 +1,10 @@
 #include <fstream>
+#include <getopt.h>
 #include <inttypes.h>
 #include <iostream>
-#include <getopt.h>
+#include <thrust/functional.h>
+#include <thrust/execution_policy.h>
+#include <thrust/sort.h>
 #include "crispacuda.h"
 
 char* bits_to_string(uint64_t text, uint64_t length) {
@@ -51,13 +54,6 @@ uint64_t revcom(uint64_t text, int length) {
     }
     return reversed;
 }
-
-struct targets_t {
-    uint64_t off[max_off_list];
-    uint64_t on[max_on_list];
-    int offc;
-    int onc;
-};
 
 __device__ targets_t targets;
 
@@ -118,12 +114,13 @@ void write_output(FILE *fp, crispr_t query, targets_t targets, int *summary,
         fwrite(targets.on, sizeof(uint64_t), onc, fp);
         fwrite(targets.off, sizeof(uint64_t), offc, fp);
     } else {
+        thrust::sort(thrust::host, targets.off, targets.off + offc, thrust::less<uint64_t>());
         std::cout << query.id << "\t" << int(species_id);
         const char *sep = seps[0];
-        if(!store_offs || offc > max_off_list) {
+        if(!store_offs || targets.offc > max_off_list) {
             std::cout << "\t\\N\t{";
         } else {
-            std::cout << "{";
+            std::cout << "\t{";
             for( int j = 0; j < offc; j++ ) {
                 std::cout << sep << targets.off[j];
                 sep = seps[1];
@@ -133,7 +130,7 @@ void write_output(FILE *fp, crispr_t query, targets_t targets, int *summary,
         sep = seps[0];
         for( int j = 0; j <= max_mismatches; j++ ) {
             std::cout << sep << j << ": " << summary[j];
-            sep = seps[1];
+            sep = seps[2];
         }
         std::cout << "}" << std::endl;
     }
