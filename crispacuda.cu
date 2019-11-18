@@ -56,6 +56,10 @@ uint64_t revcom(uint64_t text, int length) {
 }
 
 __device__ targets_t targets;
+__constant__ __device__ uint64_t pam_on;
+__constant__ __device__ uint64_t pam_off;
+__constant__ __device__ metadata_t d_metadata;
+__constant__ __device__ options_t d_options;
 
 __device__ void push_back(uint64_t id, int mm) {
     int insert_pt = atomicAdd(&targets.offc, 1);
@@ -71,18 +75,17 @@ __device__ void push_back(uint64_t id, int mm) {
 }
 
 __global__
-void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary, metadata_t metadata) {
-    const uint64_t pam_on = 0x1ull << metadata.seq_length *2;
-    const uint64_t pam_off = ~pam_on;
-
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
+void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary) {
+    int tid = threadIdx.x;
+    int index = blockIdx.x * blockDim.x + tid;
     int stride = blockDim.x * gridDim.x;
-    if(blockIdx.x == 0 && threadIdx.x == 0) {
+    if(blockIdx.x == 0 && tid <= d_options.max_mismatches) {
         targets.offc = 0;
         targets.onc  = 0;
+        summary[tid] = 0;
     }
     __syncthreads();
-    for ( uint64_t j = index; j < metadata.num_seqs; j+= stride ) {
+    for ( uint64_t j = index; j < d_metadata.num_seqs; j+= stride ) {
         uint64_t test_crispr = crisprs[j];
         if ( test_crispr == ERROR_STR ) continue;
 
@@ -95,29 +98,29 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary, metadata_
         match = (match | (match >> 1)) & (0x5555555555555555ull);
         int mm = __popcll(match);
 
-        if ( mm <= max_mismatches ) {
+        if ( mm <= d_options.max_mismatches ) {
             atomicAdd(&summary[mm], 1);
-            push_back(j + 1 + metadata.offset, mm);
+            push_back(j + 1 + d_metadata.offset, mm);
         }
     }
 }
 
-void write_output(FILE *fp, crispr_t query, targets_t targets, int *summary,
-        int species_id, bool store_offs) {
+void write_output(FILE *fp, crispr_t query, int *summary, targets_t targets,
+        metadata_t metadata, options_t options) {
     int onc = std::min(targets.onc, max_on_list);
     int offc = std::min(targets.offc, max_off_list);
     if ( fp != NULL ) {
         fwrite(&query.id, sizeof(uint64_t), 1, fp); 
-        fwrite(summary, sizeof(int), max_mismatches+1, fp);
+        fwrite(summary, sizeof(int), options.max_mismatches+1, fp);
         fwrite(&onc, sizeof(int), 1, fp);
         fwrite(&offc, sizeof(int), 1, fp);
         fwrite(targets.on, sizeof(uint64_t), onc, fp);
         fwrite(targets.off, sizeof(uint64_t), offc, fp);
     } else {
         thrust::sort(thrust::host, targets.off, targets.off + offc, thrust::less<uint64_t>());
-        std::cout << query.id << "\t" << int(species_id);
+        std::cout << query.id << "\t" << int(metadata.species_id);
         const char *sep = seps[0];
-        if(!store_offs || targets.offc > max_off_list) {
+        if(!options.store_offs || targets.offc > max_off_list) {
             std::cout << "\t\\N\t{";
         } else {
             std::cout << "\t{";
@@ -128,7 +131,7 @@ void write_output(FILE *fp, crispr_t query, targets_t targets, int *summary,
             std::cout << "}\t{";
         }
         sep = seps[0];
-        for( int j = 0; j <= max_mismatches; j++ ) {
+        for( int j = 0; j <= options.max_mismatches; j++ ) {
             std::cout << sep << j << ": " << summary[j];
             sep = seps[2];
         }
@@ -138,24 +141,21 @@ void write_output(FILE *fp, crispr_t query, targets_t targets, int *summary,
 
 void calc_off_targets(FILE *fp, uint64_t *crisprs, crispr_t query, metadata_t metadata,
         options_t options) {
-    int summary_size = (max_mismatches+1)*sizeof(int);
+    int summary_size = (max_mismatches + 1) * sizeof(int);
     int *summary;
     cudaMalloc((void**)&summary, summary_size);
-    cudaMemset(summary, 0, summary_size);
-
     const int blockSize = 128;
     const int numBlocks = (metadata.num_seqs + blockSize - 1) / blockSize;
-    find_off_targets<<<numBlocks, blockSize>>>(crisprs, query, summary, metadata); 
+    find_off_targets<<<numBlocks, blockSize>>>(crisprs, query, summary); 
     cudaDeviceSynchronize();
 
     targets_t h_targets;
     int *h_summary = (int*)malloc(summary_size);
-    cudaMemcpyFromSymbol(&h_targets, targets, sizeof(targets_t));
+    cudaMemcpyFromSymbol(&h_targets, targets, sizeof(targets_t), 0, cudaMemcpyDeviceToHost);
     cudaMemcpy(h_summary, summary, summary_size, cudaMemcpyDeviceToHost);
     
-    write_output(fp, query, h_targets, h_summary, metadata.species_id, options.store_offs);
+    write_output(fp, query, h_summary, h_targets, metadata, options);
 
-    cudaFree(summary);
     free(h_summary);
 }
 
@@ -248,6 +248,13 @@ int main(int argc, char *argv[]) {
     t = clock() - t;
     fclose(fp);
     fprintf(stderr, "Loading took %f seconds\n", ((float)t)/CLOCKS_PER_SEC);
+    
+    uint64_t h_pam_on = 0x1ull << metadata.seq_length *2;
+    uint64_t h_pam_off = ~h_pam_on;
+    cudaMemcpyToSymbol(pam_on, &h_pam_on, sizeof(uint64_t));
+    cudaMemcpyToSymbol(pam_off, &h_pam_off, sizeof(uint64_t));
+    cudaMemcpyToSymbol(d_metadata, &metadata, sizeof(metadata_t));
+    cudaMemcpyToSymbol(d_options, &options, sizeof(options_t));
 
     for ( int i = 0; i < num_queries; i++ ) {
         if ( search.queries[i].id < metadata.offset + 1
