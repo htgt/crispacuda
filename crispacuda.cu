@@ -1,6 +1,7 @@
 #include <fstream>
 #include <inttypes.h>
 #include <iostream>
+#include <getopt.h>
 #include "crispacuda.h"
 
 char* bits_to_string(uint64_t text, uint64_t length) {
@@ -105,7 +106,41 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary, metadata_
     }
 }
 
-void calcOffSeqs(FILE *fp, uint64_t *crisprs, crispr_t query, metadata_t metadata) {
+void write_output(FILE *fp, crispr_t query, targets_t targets, int *summary,
+        int species_id, bool store_offs) {
+    int onc = std::min(targets.onc, max_on_list);
+    int offc = std::min(targets.offc, max_off_list);
+    if ( fp != NULL ) {
+        fwrite(&query.id, sizeof(uint64_t), 1, fp); 
+        fwrite(summary, sizeof(int), max_mismatches+1, fp);
+        fwrite(&onc, sizeof(int), 1, fp);
+        fwrite(&offc, sizeof(int), 1, fp);
+        fwrite(targets.on, sizeof(uint64_t), onc, fp);
+        fwrite(targets.off, sizeof(uint64_t), offc, fp);
+    } else {
+        std::cout << query.id << "\t" << int(species_id);
+        const char *sep = seps[0];
+        if(!store_offs || offc > max_off_list) {
+            std::cout << "\t\\N\t{";
+        } else {
+            std::cout << "{";
+            for( int j = 0; j < offc; j++ ) {
+                std::cout << sep << targets.off[j];
+                sep = seps[1];
+            }
+            std::cout << "}\t{";
+        }
+        sep = seps[0];
+        for( int j = 0; j <= max_mismatches; j++ ) {
+            std::cout << sep << j << ": " << summary[j];
+            sep = seps[1];
+        }
+        std::cout << "}" << std::endl;
+    }
+}
+
+void calc_off_targets(FILE *fp, uint64_t *crisprs, crispr_t query, metadata_t metadata,
+        options_t options) {
     int summary_size = (max_mismatches+1)*sizeof(int);
     int *summary;
     cudaMalloc((void**)&summary, summary_size);
@@ -117,40 +152,14 @@ void calcOffSeqs(FILE *fp, uint64_t *crisprs, crispr_t query, metadata_t metadat
     cudaDeviceSynchronize();
 
     targets_t h_targets;
-    int h_summary[max_mismatches+1];
+    int *h_summary = (int*)malloc(summary_size);
     cudaMemcpyFromSymbol(&h_targets, targets, sizeof(targets_t));
-    cudaMemcpy(&h_summary, summary, summary_size, cudaMemcpyDeviceToHost);
-    cudaFree(summary);
+    cudaMemcpy(h_summary, summary, summary_size, cudaMemcpyDeviceToHost);
     
-    int onc = std::min(h_targets.onc, max_on_list);
-    int offc = std::min(h_targets.offc, max_off_list);
-    if ( fp != NULL ) {
-        fwrite(&query.id, sizeof(uint64_t), 1, fp); 
-        fwrite(h_summary, sizeof(int), max_mismatches+1, fp);
-        fwrite(&onc, sizeof(int), 1, fp);
-        fwrite(&offc, sizeof(int), 1, fp);
-        fwrite(h_targets.on, sizeof(uint64_t), onc, fp);
-        fwrite(h_targets.off, sizeof(uint64_t), offc, fp);
-    } else {
-        std::cout << query.id << "\t" << int(metadata.species_id);
-        const char *sep = seps[0];
-        if(1 || offc > max_off_list) {
-            std::cout << "\t\\N\t{";
-        } else {
-            std::cout << "{";
-            for(int j=0;j<offc;j++){
-                std::cout << sep << h_targets.off[j];
-                sep = seps[1];
-            }
-            std::cout << "}\t{";
-        }
-        sep = seps[0];
-        for(int j=0;j<=max_mismatches;j++){
-            std::cout << sep << j << ": " << h_summary[j];
-            sep = seps[1];
-        }
-        std::cout << "}" << std::endl;
-    }
+    write_output(fp, query, h_targets, h_summary, metadata.species_id, options.store_offs);
+
+    cudaFree(summary);
+    free(h_summary);
 }
 
 metadata_t load_metadata(FILE *fp) {
@@ -179,8 +188,57 @@ metadata_t load_metadata(FILE *fp) {
     return metadata;
 }
 
-int main(void) {
-    FILE *fp = fopen("/nfs/team87/crispr_indexes/GRCh38_index.bin", "r");
+uint64_t read_options(int argc, char *argv[], search_t *search, options_t *options) {
+    int c = -1;
+    uint64_t start = 0, num = 0;
+    while ( ( c = getopt(argc, argv, "s:n:i:o:qm:") ) != -1 )  {
+        switch(c) {
+            case 's': start = atol(optarg); break;
+            case 'n': num   = atol(optarg); break;
+            case 'i': (*search).index_file = optarg; break;
+            case 'o': (*search).output_file = optarg; break;
+            case 'q': (*options).store_offs = false; break;
+            case 'm': (*options).max_mismatches = atoi(optarg); break;
+
+        }
+    }
+    if ( (*search).index_file == NULL ) {
+        fprintf(stderr, "An index file must be specified with the -i option\n");
+        return 0;
+    }
+    if ( start != 0 && num == 0 ) {
+        fprintf(stderr, "If -s is specified, -n must be also");
+        return 0;
+    }
+    if ( start == 0 && num != 0 ) {
+        fprintf(stderr, "If -n is specified, -s must be also");
+        return 0;
+    }
+    uint64_t num_queries = argc - optind + num;
+    (*search).queries = (crispr_t*)malloc(num_queries * sizeof(crispr_t));
+    for ( int i = 0; i < num; i++ ) {
+        (*search).queries[i].id = start + i;
+    }
+    for ( int i = optind; i < argc; i++ ) {
+        uint64_t id = atol(argv[i]);
+        if ( id == 0 ) {
+            fprintf(stderr, "Could not parse '%s' an ID\n", argv[i]);
+            return false;
+        }
+        (*search).queries[i - optind + num].id = id;
+    }
+    return num_queries;
+}
+
+int main(int argc, char *argv[]) {
+    search_t search = default_search;
+    options_t options = default_options;
+    uint64_t num_queries = read_options(argc, argv, &search, &options);
+    if ( num_queries == 0 ) {
+        return 1;
+    }
+
+    FILE *fp = fopen(search.index_file, "r");
     if ( fp == NULL ) {
         fprintf(stderr, "Could not open index\n");
         exit(1);
@@ -194,12 +252,15 @@ int main(void) {
     fclose(fp);
     fprintf(stderr, "Loading took %f seconds\n", ((float)t)/CLOCKS_PER_SEC);
 
-    int num_queries = 2000;
-    crispr_t *queries = (crispr_t*)malloc(num_queries * sizeof(crispr_t));
     for ( int i = 0; i < num_queries; i++ ) {
-        queries[i].id = 1106710986 + i;
-        queries[i].seq = h_crisprs[queries[i].id - metadata.offset - 1];
-        queries[i].rev_seq = revcom(queries[i].seq, metadata.seq_length);
+        if ( search.queries[i].id < metadata.offset + 1
+                || search.queries[i].id > metadata.offset + metadata.num_seqs ) {
+            fprintf(stderr, "%" PRIu64 " is not a valid ID in this index\n",
+                    search.queries[i].id);
+            return 2;
+        }
+        search.queries[i].seq = h_crisprs[search.queries[i].id - metadata.offset - 1];
+        search.queries[i].rev_seq = revcom(search.queries[i].seq, metadata.seq_length);
     }
 
     uint64_t *crisprs;
@@ -208,18 +269,20 @@ int main(void) {
     free(h_crisprs);
 
     FILE *fw = NULL;
-    /*fopen("output.offt", "w");
-    if ( fw == NULL ) {
-        fprintf(stderr, "Could not open output file\n");
-        exit(1);
-    }*/
+    if ( search.output_file != NULL ) {
+        fw = fopen(search.output_file, "w");
+        if ( fw == NULL ) {
+            fprintf(stderr, "Could not open output file\n");
+            exit(1);
+        }
+    }
     for ( int i = 0; i < num_queries; i++ ) {
-        calcOffSeqs(fw, crisprs, queries[i], metadata);
+        calc_off_targets(fw, crisprs, search.queries[i], metadata, options);
     }
     if ( fw != NULL ) {
         fclose(fw);
     }
 
-    free(queries);
     cudaFree(crisprs);
+    free(search.queries);
 }

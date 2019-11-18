@@ -23,3 +23,14 @@ struct crispr_t {
     uint64_t rev_seq;
 };
 
+struct search_t {
+    crispr_t *queries;
+    char *index_file;
+    char *output_file;
+} default_search = {NULL, NULL, NULL};
+
+struct options_t {
+    bool store_offs;
+    int max_mismatches;
+} default_options = {true, 4};
+
