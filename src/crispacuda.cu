@@ -6,39 +6,8 @@
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
 #include "crispacuda.h"
-
-char* bits_to_string(uint64_t text, uint64_t length) {
-    char *s = (char*)malloc(length + 1);
-    memset(s, 0, length + 1);
-    uint64_t shift = 2 * ( length - 1 ); //there are twice as many bits as there are characters
-
-    //fill with N if its an error string (all bits set to 1)
-    if ( text == ERROR_STR ) {
-        memset(s, 'N', length);
-    }
-
-    //extract each character from the text
-    for ( int i = 0; i < length; i++, shift -= 2 ) {
-        //put the character we're interested in at the very end
-        //of the integer, and switch all remaining bits to 0 with & 0x3
-        uint8_t character = (text >> shift) & 0x3;
-        switch ( character ) {
-            case 0: s[i] = 'A'; break;
-            case 1: s[i] = 'C'; break;
-            case 2: s[i] = 'G'; break;
-            case 3: s[i] = 'T'; break;
-            default: break;
-        }
-    }
-
-    return s;
-}
-
-void print_seq(uint64_t text, uint64_t length) {
-    char *seq = bits_to_string(text, length);
-    printf("%s\n", seq);
-    free(seq);
-}
+#include "devices.h"
+#include "printseq.h"
 
 uint64_t revcom(uint64_t text, int length) {
     unsigned int num_bits = sizeof(text) * CHAR_BIT;
@@ -161,14 +130,14 @@ void calc_off_targets(FILE *fp, uint64_t *crisprs, crispr_t query, metadata_t me
 
 metadata_t load_metadata(FILE *fp) {
     uint8_t endian_test;
-    fread(&endian_test, sizeof(uint8_t), 1, fp);
+    CHECK_FREAD(&endian_test, sizeof(uint8_t), 1, fp);
     if ( endian_test != 1 ) {
         fprintf(stderr, "Endianess of the file does not match your hardware\n");
         exit(1);
     }
 
     uint32_t file_version;
-    fread(&file_version, sizeof(uint32_t), 1, fp);
+    CHECK_FREAD(&file_version, sizeof(uint32_t), 1, fp);
     if ( file_version != VERSION ) {
         fprintf(stderr, "Index file is the wrong version! Please regenerate!\n");
         exit(1);
@@ -176,7 +145,7 @@ metadata_t load_metadata(FILE *fp) {
     fprintf(stderr, "Version is %d\n", file_version);
 
     metadata_t metadata;
-    fread(&metadata, sizeof(metadata_t), 1, fp);
+    CHECK_FREAD(&metadata, sizeof(metadata_t), 1, fp);
     fprintf(stderr, "Assembly is %s (%s)\n", metadata.assembly, metadata.species);
     fprintf(stderr, "File has %" PRIu64 " sequences\n", metadata.num_seqs);
     fprintf(stderr, "Sequence length is %" PRIu64 "\n", metadata.seq_length);
@@ -185,10 +154,11 @@ metadata_t load_metadata(FILE *fp) {
     return metadata;
 }
 
-uint64_t read_options(int argc, char *argv[], search_t *search, options_t *options) {
-    int c = -1;
+int64_t read_options(int argc, char *argv[], search_t *search, options_t *options) {
+    int c = -1, device = 0;
     uint64_t start = 0, num = 0;
-    while ( ( c = getopt(argc, argv, "s:n:i:o:qm:") ) != -1 )  {
+    bool show_help = false;
+    while ( ( c = getopt(argc, argv, "s:n:i:o:m:d:hq") ) != -1 )  {
         switch(c) {
             case 's': start = atol(optarg); break;
             case 'n': num   = atol(optarg); break;
@@ -196,22 +166,56 @@ uint64_t read_options(int argc, char *argv[], search_t *search, options_t *optio
             case 'o': (*search).output_file = optarg; break;
             case 'q': (*options).store_offs = false; break;
             case 'm': (*options).max_mismatches = atoi(optarg); break;
-
+            case 'h': show_help = true; break;
+            case 'd': device = atoi(optarg); break;
         }
+    }
+    if ( show_help ) {
+        printf("CRISPACUDA\n");
+        printf("Searches for CRISPR off-targets on a GPU\n");
+        printf("Usage: crispacuda [options] <ids...>\n");
+        printf("Contact: Joel Rein joel.rein@sanger.ac.uk\n\n");
+        printf("OPTIONS:\n");
+        printf("-i <FILE>\n");
+        printf("\tSpecify the index file to search. REQUIRED.\n");
+        printf("-o <FILE>\n");
+        printf("\tSpecify an binary file to output to. Prints text to STDOUT otherwise.\n");
+        printf("-s <INT>\n");
+        printf("\tThe index to start searches from\n");
+        printf("-n <INT>\n");
+        printf("\tHow many off-targets to calculate from start.\n");
+        printf("\tRequired if, and only if, -s is specified.\n");
+        printf("-m <INT>\n");
+        printf("\tThe maximum number of mismatches to record results for. Defaults to 4.\n");
+        printf("-q\n\tDo not report a list of off-targets.\n");
+        printf("\t Has no effect if outputting to a binary file.\n");
+        printf("-h\n\tPrint this help message and GPU information\n");
+        printf("-d <INT>\n\tThe GPU device to use.\n\n");
+        printf("Following these arguments you may specify individual CRISPRs to search.\n\n");
+        printf("EXIT CODES\n");
+        printf("\tNegative exit codes indicate errors in command line options.\n");
+        printf("\tPositive exit codes indicate errors running the search.\n");
+        printf("\tReturns 0 on success.\n\n");
+        show_devices();
+        return 0;
+    }
+    if ( device >= 1 && cudaSetDevice(device) != cudaSuccess ) {
+        fprintf(stderr, "Could not use device %d\n", device);
+        return -1;
     }
     if ( (*search).index_file == NULL ) {
         fprintf(stderr, "An index file must be specified with the -i option\n");
-        return 0;
+        return -2;
     }
     if ( start != 0 && num == 0 ) {
         fprintf(stderr, "If -s is specified, -n must be also");
-        return 0;
+        return -3;
     }
     if ( start == 0 && num != 0 ) {
         fprintf(stderr, "If -n is specified, -s must be also");
-        return 0;
+        return -4;
     }
-    uint64_t num_queries = argc - optind + num;
+    int64_t num_queries = argc - optind + num;
     (*search).queries = (crispr_t*)malloc(num_queries * sizeof(crispr_t));
     for ( int i = 0; i < num; i++ ) {
         (*search).queries[i].id = start + i;
@@ -220,7 +224,7 @@ uint64_t read_options(int argc, char *argv[], search_t *search, options_t *optio
         uint64_t id = atol(argv[i]);
         if ( id == 0 ) {
             fprintf(stderr, "Could not parse '%s' an ID\n", argv[i]);
-            return false;
+            return -1;
         }
         (*search).queries[i - optind + num].id = id;
     }
@@ -230,9 +234,9 @@ uint64_t read_options(int argc, char *argv[], search_t *search, options_t *optio
 int main(int argc, char *argv[]) {
     search_t search = default_search;
     options_t options = default_options;
-    uint64_t num_queries = read_options(argc, argv, &search, &options);
-    if ( num_queries == 0 ) {
-        return 1;
+    int64_t num_queries = read_options(argc, argv, &search, &options);
+    if ( num_queries <= 0 ) {
+        return num_queries;
     }
 
     FILE *fp = fopen(search.index_file, "r");
@@ -244,17 +248,18 @@ int main(int argc, char *argv[]) {
     clock_t t = clock();
     const uint64_t data_size = metadata.num_seqs * sizeof(uint64_t);
     uint64_t *h_crisprs = (uint64_t*)malloc(data_size);
-    fread(h_crisprs, sizeof(uint64_t), metadata.num_seqs, fp);
+    CHECK_FREAD(h_crisprs, sizeof(uint64_t), metadata.num_seqs, fp);
     t = clock() - t;
     fclose(fp);
     fprintf(stderr, "Loading took %f seconds\n", ((float)t)/CLOCKS_PER_SEC);
+    print_seq(h_crisprs[0], 20);
     
     uint64_t h_pam_on = 0x1ull << metadata.seq_length *2;
     uint64_t h_pam_off = ~h_pam_on;
-    cudaMemcpyToSymbol(pam_on, &h_pam_on, sizeof(uint64_t));
-    cudaMemcpyToSymbol(pam_off, &h_pam_off, sizeof(uint64_t));
-    cudaMemcpyToSymbol(d_metadata, &metadata, sizeof(metadata_t));
-    cudaMemcpyToSymbol(d_options, &options, sizeof(options_t));
+    CHECK_CUDA(cudaMemcpyToSymbol(pam_on, &h_pam_on, sizeof(uint64_t)));
+    CHECK_CUDA(cudaMemcpyToSymbol(pam_off, &h_pam_off, sizeof(uint64_t)));
+    CHECK_CUDA(cudaMemcpyToSymbol(d_metadata, &metadata, sizeof(metadata_t)));
+    CHECK_CUDA(cudaMemcpyToSymbol(d_options, &options, sizeof(options_t)));
 
     for ( int i = 0; i < num_queries; i++ ) {
         if ( search.queries[i].id < metadata.offset + 1
@@ -268,8 +273,16 @@ int main(int argc, char *argv[]) {
     }
 
     uint64_t *crisprs;
-    cudaMalloc((void**)&crisprs, data_size);
-    cudaMemcpy(crisprs, h_crisprs, data_size, cudaMemcpyHostToDevice);
+    size_t free_memory, total_memory;
+    cudaMemGetInfo(&free_memory, &total_memory);
+    fprintf(stderr, "Requires %" PRIu64 "mb of GPU memory, %" PRIu64 "mb is available\n",
+            data_size >> 20, free_memory >> 20);
+    if ( data_size > free_memory ) {
+        fprintf(stderr, "Insufficient GPU memory, exiting.\n");
+        return 3;
+    }
+    CHECK_CUDA(cudaMalloc((void**)&crisprs, data_size));
+    CHECK_CUDA(cudaMemcpy(crisprs, h_crisprs, data_size, cudaMemcpyHostToDevice));
     free(h_crisprs);
 
     FILE *fw = NULL;
@@ -289,4 +302,5 @@ int main(int argc, char *argv[]) {
 
     cudaFree(crisprs);
     free(search.queries);
+    return 0;
 }

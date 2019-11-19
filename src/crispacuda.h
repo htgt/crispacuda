@@ -1,5 +1,4 @@
 #pragma once
-#define ERROR_STR 0xFFFFFFFFFFFFFFFFull
 #define MAX_CHAR_SIZE 30
 #define VERSION 3
 
@@ -41,3 +40,24 @@ struct options_t {
     int max_mismatches;
 } default_options = {true, 4};
 
+#ifndef CHECK_CUDA
+static void checked_cuda(cudaError_t err, const char *file, int line) {
+    if (err != cudaSuccess) {
+        fprintf(stderr, "%s in %s at line %d\n", cudaGetErrorString(err), file, line );
+        exit( EXIT_FAILURE );
+    }
+}
+#define CHECK_CUDA( err ) (checked_cuda( err, __FILE__, __LINE__ ))
+#endif
+
+#ifndef CHECK_FREAD
+static void checked_fread(void *ptr, size_t size, size_t count, FILE *fp,
+        const char *file, int line) {
+    size_t actual = fread(ptr, size, count, fp);
+    if ( size != actual * count ) {
+        fprintf(stderr, "Read %" PRIu64 " bytes but expected %" PRIu64 " in %s at line %d\n",
+                actual, actual * count, file, line);
+    }
+}
+#define CHECK_FREAD(ptr,size,count,fp) (checked_fread(ptr, size, count, fp, __FILE__, __LINE__)) 
+#endif
