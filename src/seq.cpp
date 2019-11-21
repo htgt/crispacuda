@@ -2,8 +2,10 @@
 #include <cstring>
 #include <inttypes.h>
 #include <stdio.h>
-#include "printseq.h"
+#include "seq.h"
 #define ERROR_STR 0xFFFFFFFFFFFFFFFFull
+
+uint8_t cmap[256];
 
 char* bits_to_string(uint64_t text, uint64_t length) {
     char *s = (char*)malloc(length + 1);
@@ -36,4 +38,29 @@ void print_seq(uint64_t text, uint64_t length) {
     char *seq = bits_to_string(text, length);
     printf("%s\n", seq);
     free(seq);
+}
+
+void populate_cmap() {
+    memset(cmap, 4, 256);
+    cmap['a'] = cmap['A'] = 0;
+    cmap['c'] = cmap['C'] = 1;
+    cmap['g'] = cmap['G'] = 2;
+    cmap['t'] = cmap['T'] = 3;
+}
+
+uint64_t string_to_bits(const char *seq, uint64_t seq_length, uint64_t bits) {
+	for ( int j = 0; j < seq_length; j++ ) {
+		uint8_t const c = seq[j];
+
+		if ( cmap[c] == 4 ) {
+			bits = ERROR_STR;
+			break;
+		}
+		else {
+			bits <<= 2;
+			bits |= cmap[c];
+		}
+	}
+
+	return bits;
 }

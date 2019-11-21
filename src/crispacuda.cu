@@ -7,7 +7,7 @@
 #include <thrust/sort.h>
 #include "crispacuda.h"
 #include "devices.h"
-#include "printseq.h"
+#include "seq.h"
 
 uint64_t revcom(uint64_t text, int length) {
     unsigned int num_bits = sizeof(text) * CHAR_BIT;
@@ -158,7 +158,7 @@ int64_t read_options(int argc, char *argv[], search_t *search, options_t *option
     int c = -1, device = 0;
     uint64_t start = 0, num = 0;
     bool show_help = false;
-    while ( ( c = getopt(argc, argv, "s:n:i:o:m:d:hq") ) != -1 )  {
+    while ( ( c = getopt(argc, argv, "s:n:i:o:m:d:hqz") ) != -1 )  {
         switch(c) {
             case 's': start = atol(optarg); break;
             case 'n': num   = atol(optarg); break;
@@ -168,6 +168,7 @@ int64_t read_options(int argc, char *argv[], search_t *search, options_t *option
             case 'm': (*options).max_mismatches = atoi(optarg); break;
             case 'h': show_help = true; break;
             case 'd': device = atoi(optarg); break;
+            case 'z': (*search).search_by_seq = true; break;
         }
     }
     if ( show_help ) {
@@ -190,7 +191,8 @@ int64_t read_options(int argc, char *argv[], search_t *search, options_t *option
         printf("-q\n\tDo not report a list of off-targets.\n");
         printf("\t Has no effect if outputting to a binary file.\n");
         printf("-h\n\tPrint this help message and GPU information\n");
-        printf("-d <INT>\n\tThe GPU device to use.\n\n");
+        printf("-d <INT>\n\tThe GPU device to use.\n");
+        printf("-z\n\tSpecify CRISPRs as strings rather than IDs\n");
         printf("Following these arguments you may specify individual CRISPRs to search.\n\n");
         printf("EXIT CODES\n");
         printf("\tNegative exit codes indicate errors in command line options.\n");
@@ -215,16 +217,26 @@ int64_t read_options(int argc, char *argv[], search_t *search, options_t *option
         fprintf(stderr, "If -n is specified, -s must be also");
         return -4;
     }
+    if ( start != 0 && (*search).search_by_seq ) {
+        fprintf(stderr, "-s and -n are not compatible with search by sequence\n");
+        return -5;
+    }
     int64_t num_queries = argc - optind + num;
     (*search).queries = (crispr_t*)malloc(num_queries * sizeof(crispr_t));
+    memset((*search).queries, 0, num_queries * sizeof(crispr_t));
     for ( int i = 0; i < num; i++ ) {
         (*search).queries[i].id = start + i;
     }
     for ( int i = optind; i < argc; i++ ) {
-        uint64_t id = atol(argv[i]);
-        if ( id == 0 ) {
-            fprintf(stderr, "Could not parse '%s' an ID\n", argv[i]);
-            return -1;
+        uint64_t id = 0;
+        if ((*search).search_by_seq) {
+            id = i;
+        } else {
+            id = atol(argv[i]);
+            if ( id == 0 ) {
+                fprintf(stderr, "Could not parse '%s' an ID\n", argv[i]);
+                return -6;
+            }
         }
         (*search).queries[i - optind + num].id = id;
     }
@@ -232,6 +244,7 @@ int64_t read_options(int argc, char *argv[], search_t *search, options_t *option
 }
 
 int main(int argc, char *argv[]) {
+    populate_cmap();
     search_t search = default_search;
     options_t options = default_options;
     int64_t num_queries = read_options(argc, argv, &search, &options);
@@ -252,7 +265,6 @@ int main(int argc, char *argv[]) {
     t = clock() - t;
     fclose(fp);
     fprintf(stderr, "Loading took %f seconds\n", ((float)t)/CLOCKS_PER_SEC);
-    print_seq(h_crisprs[0], 20);
     
     uint64_t h_pam_on = 0x1ull << metadata.seq_length *2;
     uint64_t h_pam_off = ~h_pam_on;
@@ -262,13 +274,21 @@ int main(int argc, char *argv[]) {
     CHECK_CUDA(cudaMemcpyToSymbol(d_options, &options, sizeof(options_t)));
 
     for ( int i = 0; i < num_queries; i++ ) {
-        if ( search.queries[i].id < metadata.offset + 1
-                || search.queries[i].id > metadata.offset + metadata.num_seqs ) {
-            fprintf(stderr, "%" PRIu64 " is not a valid ID in this index\n",
-                    search.queries[i].id);
-            return 2;
+        if ( search.search_by_seq ) {
+            search.queries[i].seq = string_to_bits(argv[search.queries[i].id], metadata.seq_length, 1);
+            if ( search.queries[i].seq == ERROR_STR ) {
+                fprintf(stderr, "%s is not a valid sequence\n", argv[search.queries[i].id]);
+                return 2;
+            }
+            search.queries[i].id = 0;
+        } else {
+            if ( search.queries[i].id < metadata.offset + 1
+                    || search.queries[i].id > metadata.offset + metadata.num_seqs ) {
+                fprintf(stderr, "%" PRIu64 " is not a valid ID in this index\n", search.queries[i].id);
+                return 2;
+            }
+            search.queries[i].seq = h_crisprs[search.queries[i].id - metadata.offset - 1];
         }
-        search.queries[i].seq = h_crisprs[search.queries[i].id - metadata.offset - 1];
         search.queries[i].rev_seq = revcom(search.queries[i].seq, metadata.seq_length);
     }
 

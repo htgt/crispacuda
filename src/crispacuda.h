@@ -33,7 +33,8 @@ struct search_t {
     crispr_t *queries;
     char *index_file;
     char *output_file;
-} default_search = {NULL, NULL, NULL};
+    bool search_by_seq;
+} default_search = {NULL, NULL, NULL, false};
 
 struct options_t {
     bool store_offs;
@@ -54,9 +55,10 @@ static void checked_cuda(cudaError_t err, const char *file, int line) {
 static void checked_fread(void *ptr, size_t size, size_t count, FILE *fp,
         const char *file, int line) {
     size_t actual = fread(ptr, size, count, fp);
-    if ( size != actual * count ) {
-        fprintf(stderr, "Read %" PRIu64 " bytes but expected %" PRIu64 " in %s at line %d\n",
-                actual, actual * count, file, line);
+    if ( actual != count ) {
+        fprintf(stderr, "Read %" PRIu64 " elements but expected %" PRIu64 " (%zu * %zu) in %s at line %d\n",
+                actual, count, size, count, file, line);
+        exit( EXIT_FAILURE );
     }
 }
 #define CHECK_FREAD(ptr,size,count,fp) (checked_fread(ptr, size, count, fp, __FILE__, __LINE__)) 
