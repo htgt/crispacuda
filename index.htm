@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8"/>
+        <title>crispacuda server</title>
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+        <script type="text/javascript">
+$(document).ready(function(){
+    $('#search').click(function(){
+        var start = Date.now();
+        $.post({
+            url: '/search',
+            data: $('#crisprs').val(),
+            success: function(data){
+                var taken = Date.now() - start;
+                $('#time').text('Time taken: ' + taken + 'ms');
+                $('#response').text(data);
+            },
+            dataType: 'text',
+        });
+    })
+});
+        </script>
+    </head>
+    <body>
+        <h1>Crispacuda</h1>
+        <p>Enter some WGE IDs (one per line):</p>
+        <textarea id="crisprs" rows="4" cols="80"></textarea><br/>
+        <input id="search" type="submit" value="Search">
+        <h2>Response</h2>
+        <span id="time"></span><br/>
+        <pre id="response"></pre>
+    </body>
+</html>
+

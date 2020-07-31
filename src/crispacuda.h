@@ -31,9 +31,9 @@ struct targets_t {
 struct search_t {
     crispr_t *queries;
     char *index_file;
-    char *output_file;
     bool search_by_seq;
-} default_search = {NULL, NULL, NULL, false};
+    char *port;
+} default_search = {NULL, NULL, false, NULL};
 
 struct options_t {
     bool store_offs;
