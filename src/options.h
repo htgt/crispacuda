@@ -1,3 +1,4 @@
+    CHECK_CUDA(cudaMemcpyToSymbol(d_options, &(userdata->options), sizeof(options_t)));
 #pragma once
 #include <cstddef>
 #include <cstdint>

@@ -2,29 +2,27 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <iostream>
-#include <ostream>
 #include <sstream>
 #include <iomanip>
 #include <string.h>
 #include <thrust/functional.h>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
-#include <vector>
+#include "check.h"
 #include "crispacuda.h"
 #include "mongoose.h"
+#include "ots.h"
 #include "options.h"
 #include "seq.h"
+using namespace std;
 
-uint64_t *crisprs;
-uint64_t *h_crisprs;
-metadata_t metadata;
-options_t options;
 __device__ targets_t targets;
 __constant__ __device__ uint64_t pam_on;
 __constant__ __device__ uint64_t pam_off;
 __constant__ __device__ metadata_t d_metadata;
 __constant__ __device__ options_t d_options;
 
+const char *seps[3] = { "", ",", ", " };
 __device__ void push_back(uint64_t id, int mm) {
     int insert_pt = atomicAdd(&targets.offc, 1);
     if ( insert_pt < max_off_list ) {
@@ -69,13 +67,13 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary) {
     }
 }
 
-void write_output(std::ostream &stream, crispr_t query, int *summary, targets_t targets) {
-    int onc = std::min(targets.onc, max_on_list);
-    int offc = std::min(targets.offc, max_off_list);
+void write_output(ostream &stream, crispr_t query, int *summary, targets_t targets, userdata_t *userdata) {
+    int onc = min(targets.onc, max_on_list);
+    int offc = min(targets.offc, max_off_list);
     thrust::sort(thrust::host, targets.off, targets.off + offc, thrust::less<uint64_t>());
-    stream << query.id << "\t" << int(metadata.species_id);
+    stream << query.id << "\t" << int(userdata->metadata.species_id);
     const char *sep = seps[0];
-    if(!options.store_offs || targets.offc > max_off_list) {
+    if(!userdata->options.store_offs || targets.offc > max_off_list) {
         stream << "\t\\N\t{";
     } else {
         stream << "\t{";
@@ -86,20 +84,21 @@ void write_output(std::ostream &stream, crispr_t query, int *summary, targets_t 
         stream << "}\t{";
     }
     sep = seps[0];
-    for( int j = 0; j <= options.max_mismatches; j++ ) {
+    for( int j = 0; j <= userdata->options.max_mismatches; j++ ) {
         stream << sep << j << ": " << summary[j];
         sep = seps[2];
     }
-    stream << "}" << std::endl;
+    stream << "}" << endl;
 }
 
-void calc_off_targets(std::ostream &stream, crispr_t query) {
+void calc_off_targets(ostream &stream, userdata_t *userdata, crispr_t query) {
+    CHECK_CUDA(cudaMemcpyToSymbol(d_metadata, &(userdata->metadata), sizeof(metadata_t)));
     int summary_size = (max_mismatches + 1) * sizeof(int);
     int *summary;
     cudaMalloc((void**)&summary, summary_size);
     const int blockSize = 128;
-    const int numBlocks = (metadata.num_seqs + blockSize - 1) / blockSize;
-    find_off_targets<<<numBlocks, blockSize>>>(crisprs, query, summary); 
+    const int numBlocks = (userdata->metadata.num_seqs + blockSize - 1) / blockSize;
+    find_off_targets<<<numBlocks, blockSize>>>(userdata->d_crisprs, query, summary); 
     cudaDeviceSynchronize();
 
     targets_t h_targets;
@@ -107,7 +106,7 @@ void calc_off_targets(std::ostream &stream, crispr_t query) {
     cudaMemcpyFromSymbol(&h_targets, targets, sizeof(targets_t), 0, cudaMemcpyDeviceToHost);
     cudaMemcpy(h_summary, summary, summary_size, cudaMemcpyDeviceToHost);
     
-    write_output(stream, query, h_summary, h_targets);
+    write_output(stream, query, h_summary, h_targets, userdata);
 
     free(h_summary);
 }
@@ -138,62 +137,10 @@ metadata_t load_metadata(FILE *fp) {
     return metadata;
 }
 
-void parse_request(struct mg_str req, std::vector<uint64_t> &ids) {
-    char *query, *id;
-    query = (char*)malloc(req.len + 1);
-    memset(query, 0, req.len + 1);
-    strncpy(query, req.p, req.len);
-    while ( (id = strsep(&query, "\n")) != NULL ) {
-        ids.push_back(atol(id));
-    }
-}
-
-static void handle_request(struct mg_connection *c, int ev, void *p) {
-    if ( ev == MG_EV_HTTP_REQUEST ) {
-        struct http_message *hm = (struct http_message *)p;
-        
-        if( mg_vcmp(&hm->uri, "/search") == 0 ) {
-            std::vector<uint64_t> ids;
-            parse_request(hm->body, ids);
-            std::stringstream results;
-            for(uint64_t id : ids) {
-                crispr_t crispr;
-                if ( id <= metadata.offset || id > metadata.offset + metadata.num_seqs ) {
-                    continue;
-                }
-                crispr.id = id;
-                crispr.seq = h_crisprs[id - metadata.offset - 1];
-                crispr.rev_seq = revcom(crispr.seq, metadata.seq_length);
-                calc_off_targets(results, crispr);
-            }
-            const std::string tmp = results.str();
-            struct mg_str response = mg_mk_str(tmp.c_str());
-            mg_send_head(c, 200, response.len, "Content-Type: text/plain");
-            mg_printf(c, "%.*s", (int)response.len, response.p);
-        } else if( mg_vcmp(&hm->uri, "/favicon.ico") == 0 ) {
-            mg_http_serve_file(c, hm, "favicon.ico", mg_mk_str("image/ico"), mg_mk_str(""));
-        } else {
-            mg_http_serve_file(c, hm, "index.htm", mg_mk_str("text/html"), mg_mk_str(""));
-        }
-    }
-}
-
-void run_server(char *port) {
-    struct mg_mgr mgr;
-    struct mg_connection *c;
-    mg_mgr_init(&mgr, NULL);
-    c = mg_bind(&mgr, port, handle_request);
-    mg_set_protocol_http_websocket(c);
-    for(;;) {
-        mg_mgr_poll(&mgr, 1000000);
-    }
-    mg_mgr_free(&mgr);
-}
-
 int main(int argc, char *argv[]) {
     populate_cmap();
     search_t search = default_search;
-    options = default_options;
+    options_t options = default_options;
     int64_t num_queries = read_options(argc, argv, &search, &options);
     if ( num_queries <= 0  && search.port == NULL) {
         return num_queries;
@@ -204,10 +151,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Could not open index\n");
         exit(1);
     }
-    metadata = load_metadata(fp);
+    metadata_t metadata = load_metadata(fp);
     clock_t t = clock();
     const uint64_t data_size = metadata.num_seqs * sizeof(uint64_t);
-    h_crisprs = (uint64_t*)malloc(data_size);
+    uint64_t *h_crisprs = (uint64_t*)malloc(data_size);
     CHECK_FREAD(h_crisprs, sizeof(uint64_t), metadata.num_seqs, fp);
     t = clock() - t;
     fclose(fp);
@@ -215,10 +162,9 @@ int main(int argc, char *argv[]) {
     
     uint64_t h_pam_on = 0x1ull << metadata.seq_length *2;
     uint64_t h_pam_off = ~h_pam_on;
+    CHECK_CUDA(cudaMemcpyToSymbol(d_options, &(userdata->options), sizeof(options_t)));
     CHECK_CUDA(cudaMemcpyToSymbol(pam_on, &h_pam_on, sizeof(uint64_t)));
     CHECK_CUDA(cudaMemcpyToSymbol(pam_off, &h_pam_off, sizeof(uint64_t)));
-    CHECK_CUDA(cudaMemcpyToSymbol(d_metadata, &metadata, sizeof(metadata_t)));
-    CHECK_CUDA(cudaMemcpyToSymbol(d_options, &options, sizeof(options_t)));
 
     for ( int i = 0; i < num_queries; i++ ) {
         if ( search.search_by_seq ) {
@@ -239,6 +185,7 @@ int main(int argc, char *argv[]) {
         search.queries[i].rev_seq = revcom(search.queries[i].seq, metadata.seq_length);
     }
 
+    uint64_t *d_crisprs;
     size_t free_memory, total_memory;
     cudaMemGetInfo(&free_memory, &total_memory);
     fprintf(stderr, "Requires %" PRIu64 "mb of GPU memory, %" PRIu64 "mb is available\n",
@@ -247,19 +194,20 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Insufficient GPU memory, exiting.\n");
         return 3;
     }
-    CHECK_CUDA(cudaMalloc((void**)&crisprs, data_size));
-    CHECK_CUDA(cudaMemcpy(crisprs, h_crisprs, data_size, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMalloc((void**)&d_crisprs, data_size));
+    CHECK_CUDA(cudaMemcpy(d_crisprs, h_crisprs, data_size, cudaMemcpyHostToDevice));
 
+    userdata_t userdata = {metadata, options, h_crisprs, d_crisprs};
     for ( int i = 0; i < num_queries; i++ ) {
-        calc_off_targets(std::cout, search.queries[i]);
+        calc_off_targets(cout, &userdata, search.queries[i]);
     }
     if ( search.port != NULL ) {
         printf("Starting server on port %s...\n", search.port);
-        run_server(search.port);
+        run_server(search.port, userdata);;
     }
 
     free(h_crisprs);
-    cudaFree(crisprs);
+    cudaFree(d_crisprs);
     free(search.queries);
     return 0;
 }
