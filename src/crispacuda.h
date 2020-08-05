@@ -16,30 +16,12 @@ struct metadata_t {
     char assembly[MAX_CHAR_SIZE];
 };
 
-struct crispr_t {
-    uint64_t id;
-    uint64_t seq;
-    uint64_t rev_seq;
-};
-
 struct targets_t {
     uint64_t off[max_off_list];
     uint64_t on[max_on_list];
     int offc;
     int onc;
 };
-
-struct search_t {
-    crispr_t *queries;
-    char *index_file;
-    bool search_by_seq;
-    char *port;
-} default_search = {NULL, NULL, false, NULL};
-
-struct options_t {
-    bool store_offs;
-    int max_mismatches;
-} default_options = {true, 4};
 
 #ifndef CHECK_CUDA
 static void checked_cuda(cudaError_t err, const char *file, int line) {

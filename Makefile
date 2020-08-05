@@ -1,19 +1,21 @@
-CC       :=nvcc
-CXXFLAGS :=-std=c++11 -O3
-BUILD    :=build
-SRCDIR   :=src
-TARGET   :=crispacuda
-CU_SRC   :=$(wildcard src/*.cu)
-CPP_SRC  :=$(wildcard src/*.cpp)
-CU_OBJS  :=$(patsubst $(SRCDIR)/%,$(BUILD)/%,$(CU_SRC:.cu=.o))
-CPP_OBJS :=$(patsubst $(SRCDIR)/%,$(BUILD)/%,$(CPP_SRC:.cpp=.o))
-OBJECTS  :=$(CU_OBJS) $(CPP_OBJS)
+CC        :=gcc
+CXXFLAGS  :=-std=c++11 -O3 -Wall
+NVCC      :=nvcc
+NVCCFLAGS :=-std=c++11 -O3
+BUILD     :=build
+SRCDIR    :=src
+TARGET    :=crispacuda
+CU_SRC    :=$(wildcard src/*.cu)
+CPP_SRC   :=$(wildcard src/*.cpp)
+CU_OBJS   :=$(patsubst $(SRCDIR)/%,$(BUILD)/%,$(CU_SRC:.cu=.o))
+CPP_OBJS  :=$(patsubst $(SRCDIR)/%,$(BUILD)/%,$(CPP_SRC:.cpp=.o))
+OBJECTS   :=$(CU_OBJS) $(CPP_OBJS)
 
 all: $(TARGET)
 
 $(BUILD)/%.o: $(SRCDIR)/%.cu
 	@mkdir -p $(@D)
-	$(CC) $(CXXFLAGS) -c -o $@ $<
+	$(NVCC) $(NVCCFLAGS) -c -o $@ $<
 
 $(BUILD)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(@D)
@@ -21,7 +23,7 @@ $(BUILD)/%.o: $(SRCDIR)/%.cpp
 
 $(TARGET): $(OBJECTS)
 	@echo "Linking crispacuda $^"
-	$(CC) $(CXXFLAGS) -o $(TARGET) $(OBJECTS)
+	$(NVCC) $(NVCCFLAGS) -o $(TARGET) $(OBJECTS)
 
 clean:
 	rm $(TARGET)

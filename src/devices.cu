@@ -67,3 +67,7 @@ void show_devices() {
     }
     free(version);
 }
+
+int set_device(int device) {
+    return cudaSetDevice(device);
+}
