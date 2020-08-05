@@ -26,6 +26,6 @@ $(TARGET): $(OBJECTS)
 	$(NVCC) $(NVCCFLAGS) -o $(TARGET) $(OBJECTS)
 
 clean:
-	rm $(TARGET)
+	rm -f $(TARGET)
 	rm -rvf $(BUILD)
 
