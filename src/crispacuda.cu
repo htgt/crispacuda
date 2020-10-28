@@ -62,7 +62,7 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary) {
 
         if ( mm <= d_options.max_mismatches ) {
             atomicAdd(&summary[mm], 1);
-            push_back(j + 1 + d_metadata.offset, mm);
+            //push_back(j + 1 + d_metadata.offset, mm);
         }
     }
 }
@@ -71,7 +71,14 @@ void write_output(ostream &stream, crispr_t query, int *summary, targets_t targe
     int onc = min(targets.onc, max_on_list);
     int offc = min(targets.offc, max_off_list);
     thrust::sort(thrust::host, targets.off, targets.off + offc, thrust::less<uint64_t>());
-    stream << query.id << "\t" << int(userdata->metadata.species_id);
+    if(query.id) {
+        stream << query.id;
+    } else {
+        char *seq = bits_to_string(query.seq, userdata->metadata.seq_length);
+        stream << seq;
+        free(seq);
+    }
+    stream << "\t" << int(userdata->metadata.species_id);
     const char *sep = seps[0];
     if(!userdata->options.store_offs || targets.offc > max_off_list) {
         stream << "\t\\N\t{";
@@ -105,6 +112,7 @@ void calc_off_targets(ostream &stream, userdata_t *userdata, crispr_t query) {
     int *h_summary = (int*)malloc(summary_size);
     cudaMemcpyFromSymbol(&h_targets, targets, sizeof(targets_t), 0, cudaMemcpyDeviceToHost);
     cudaMemcpy(h_summary, summary, summary_size, cudaMemcpyDeviceToHost);
+    cudaFree(summary);
     
     write_output(stream, query, h_summary, h_targets, userdata);
 
@@ -162,7 +170,6 @@ int main(int argc, char *argv[]) {
     
     uint64_t h_pam_on = 0x1ull << metadata.seq_length *2;
     uint64_t h_pam_off = ~h_pam_on;
-    CHECK_CUDA(cudaMemcpyToSymbol(d_options, &(userdata->options), sizeof(options_t)));
     CHECK_CUDA(cudaMemcpyToSymbol(pam_on, &h_pam_on, sizeof(uint64_t)));
     CHECK_CUDA(cudaMemcpyToSymbol(pam_off, &h_pam_off, sizeof(uint64_t)));
 
@@ -196,8 +203,9 @@ int main(int argc, char *argv[]) {
     }
     CHECK_CUDA(cudaMalloc((void**)&d_crisprs, data_size));
     CHECK_CUDA(cudaMemcpy(d_crisprs, h_crisprs, data_size, cudaMemcpyHostToDevice));
-
     userdata_t userdata = {metadata, options, h_crisprs, d_crisprs};
+    CHECK_CUDA(cudaMemcpyToSymbol(d_options, &(userdata.options), sizeof(options_t)));
+
     for ( int i = 0; i < num_queries; i++ ) {
         calc_off_targets(cout, &userdata, search.queries[i]);
     }

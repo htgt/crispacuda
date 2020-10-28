@@ -7,13 +7,22 @@
 #include <vector>
 using namespace std;
 
-void parse_request(struct mg_str req, vector<uint64_t> &ids) {
+void parse_request(struct mg_str req, vector<crispr_t> &crisprs, uint64_t seq_length) {
     char *query, *id;
     query = (char*)malloc(req.len + 1);
     memset(query, 0, req.len + 1);
     strncpy(query, req.p, req.len);
     while ( (id = strsep(&query, "\n")) != NULL ) {
-        ids.push_back(atol(id));
+        if ( id[0] == 0 ) {
+            continue;
+        }
+        crispr_t crispr = crispr_t {0, 0, 0};
+        if ( isdigit(id[0]) ) {
+            crispr.id = atol(id);
+        } else {
+            crispr.seq = string_to_bits(id, seq_length, 1);
+        }
+        crisprs.push_back(crispr);
     }
 }
 
@@ -23,18 +32,19 @@ static void handle_request(struct mg_connection *c, int ev, void *p) {
         struct http_message *hm = (struct http_message *)p;
         
         if( mg_vcmp(&hm->uri, "/search") == 0 ) {
-            vector<uint64_t> ids;
-            parse_request(hm->body, ids);
+            vector<crispr_t> crisprs;
+            parse_request(hm->body, crisprs, data->metadata.seq_length);
             stringstream results;
-            for(uint64_t id : ids) {
-                crispr_t crispr;
-                if ( id <= data->metadata.offset || id > data->metadata.offset + data->metadata.num_seqs ) {
+            for(vector<int>::size_type i = 0; i != crisprs.size(); i++) {
+                if ( crisprs[i].id != 0 && (crisprs[i].id <= data->metadata.offset
+                        || crisprs[i].id > data->metadata.offset + data->metadata.num_seqs) ) {
                     continue;
                 }
-                crispr.id = id;
-                crispr.seq = data->h_crisprs[id - data->metadata.offset - 1];
-                crispr.rev_seq = revcom(crispr.seq, data->metadata.seq_length);
-                calc_off_targets(results, data, crispr);
+                if ( crisprs[i].id > 0 ) {
+                    crisprs[i].seq = data->h_crisprs[crisprs[i].id - data->metadata.offset - 1];
+                }
+                crisprs[i].rev_seq = revcom(crisprs[i].seq, data->metadata.seq_length);
+                calc_off_targets(results, data, crisprs[i]);
             }
             const string tmp = results.str();
             struct mg_str response = mg_mk_str(tmp.c_str());
