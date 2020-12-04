@@ -41,10 +41,9 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary) {
     int tid = threadIdx.x;
     int index = blockIdx.x * blockDim.x + tid;
     int stride = blockDim.x * gridDim.x;
-    if(blockIdx.x == 0 && tid <= d_options.max_mismatches) {
+    if(blockIdx.x == 0 && tid == 0 ) {
         targets.offc = 0;
         targets.onc  = 0;
-        summary[tid] = 0;
     }
     __syncthreads();
     for ( uint64_t j = index; j < d_metadata.num_seqs; j+= stride ) {
@@ -100,9 +99,10 @@ void write_output(ostream &stream, crispr_t query, int *summary, targets_t targe
 
 void calc_off_targets(ostream &stream, userdata_t *userdata, crispr_t query) {
     CHECK_CUDA(cudaMemcpyToSymbol(d_metadata, &(userdata->metadata), sizeof(metadata_t)));
-    int summary_size = (max_mismatches + 1) * sizeof(int);
+    int summary_size = (userdata->options.max_mismatches + 1) * sizeof(int);
     int *summary;
     cudaMalloc((void**)&summary, summary_size);
+    cudaMemset(summary, 0, userdata->options.max_mismatches);
     const int blockSize = 128;
     const int numBlocks = (userdata->metadata.num_seqs + blockSize - 1) / blockSize;
     find_off_targets<<<numBlocks, blockSize>>>(userdata->d_crisprs, query, summary); 

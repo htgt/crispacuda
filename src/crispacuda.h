@@ -4,7 +4,6 @@
 #include "options.h"
 #include <ostream>
 
-const int max_mismatches = 4;
 const int max_on_list = 2000;
 const int max_off_list = 2000;
 
