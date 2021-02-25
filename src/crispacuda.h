@@ -2,7 +2,6 @@
 #define MAX_CHAR_SIZE 30
 #define VERSION 3
 
-const int max_mismatches = 4;
 const int max_on_list = 2000;
 const int max_off_list = 2000;
 const char *seps[3] = { "", ",", ", " };

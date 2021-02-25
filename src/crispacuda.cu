@@ -48,10 +48,9 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary) {
     int tid = threadIdx.x;
     int index = blockIdx.x * blockDim.x + tid;
     int stride = blockDim.x * gridDim.x;
-    if(blockIdx.x == 0 && tid <= d_options.max_mismatches) {
+    if(blockIdx.x == 0 && tid == 0 ) {
         targets.offc = 0;
         targets.onc  = 0;
-        summary[tid] = 0;
     }
     __syncthreads();
     for ( uint64_t j = index; j < d_metadata.num_seqs; j+= stride ) {
@@ -108,11 +107,11 @@ void write_output(FILE *fp, crispr_t query, int *summary, targets_t targets,
     }
 }
 
-void calc_off_targets(FILE *fp, uint64_t *crisprs, crispr_t query, metadata_t metadata,
-        options_t options) {
-    int summary_size = (max_mismatches + 1) * sizeof(int);
+void calc_off_targets(FILE *fp, uint64_t *crisprs, crispr_t query, metadata_t metadata, options_t options) {
+    int summary_size = (options.max_mismatches + 1) * sizeof(int);
     int *summary;
     cudaMalloc((void**)&summary, summary_size);
+    cudaMemset(summary, 0, options.max_mismatches);
     const int blockSize = 128;
     const int numBlocks = (metadata.num_seqs + blockSize - 1) / blockSize;
     find_off_targets<<<numBlocks, blockSize>>>(crisprs, query, summary); 
