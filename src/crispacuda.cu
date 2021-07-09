@@ -17,6 +17,7 @@
 using namespace std;
 
 __device__ targets_t targets;
+targets_t *p_targets;
 __constant__ __device__ uint64_t pam_on;
 __constant__ __device__ uint64_t pam_off;
 __constant__ __device__ metadata_t d_metadata;
@@ -41,11 +42,6 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary) {
     int tid = threadIdx.x;
     int index = blockIdx.x * blockDim.x + tid;
     int stride = blockDim.x * gridDim.x;
-    if(blockIdx.x == 0 && tid == 0 ) {
-        targets.offc = 0;
-        targets.onc  = 0;
-    }
-    __syncthreads();
     for ( uint64_t j = index; j < d_metadata.num_seqs; j+= stride ) {
         uint64_t test_crispr = crisprs[j];
         if ( test_crispr == ERROR_STR ) continue;
@@ -61,7 +57,7 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary) {
 
         if ( mm <= d_options.max_mismatches ) {
             atomicAdd(&summary[mm], 1);
-            //push_back(j + 1 + d_metadata.offset, mm);
+            push_back(j + 1 + d_metadata.offset, mm);
         }
     }
 }
@@ -103,6 +99,7 @@ void calc_off_targets(ostream &stream, userdata_t *userdata, crispr_t query) {
     int *summary;
     CHECK_CUDA(cudaMalloc((void**)&summary, summary_size));
     CHECK_CUDA(cudaMemset(summary, 0, userdata->options.max_mismatches));
+    CHECK_CUDA(cudaMemset(p_targets, 0, sizeof(targets_t)));
     const int blockSize = 128;
     const int numBlocks = (userdata->metadata.num_seqs + blockSize - 1) / blockSize;
     find_off_targets<<<numBlocks, blockSize>>>(userdata->d_crisprs, query, summary); 
@@ -205,6 +202,7 @@ int main(int argc, char *argv[]) {
     CHECK_CUDA(cudaMemcpy(d_crisprs, h_crisprs, data_size, cudaMemcpyHostToDevice));
     userdata_t userdata = {metadata, options, h_crisprs, d_crisprs};
     CHECK_CUDA(cudaMemcpyToSymbol(d_options, &(userdata.options), sizeof(options_t)));
+    CHECK_CUDA(cudaGetSymbolAddress((void **)&p_targets, targets));
 
     for ( int i = 0; i < num_queries; i++ ) {
         calc_off_targets(cout, &userdata, search.queries[i]);

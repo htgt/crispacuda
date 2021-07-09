@@ -3,3 +3,5 @@ crispacuda
 *.tsv
 !profile.sh
 build/
+800*.out
+nohup.out
