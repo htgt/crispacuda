@@ -79,9 +79,12 @@ void search_by_seq(uint64_t *crisprs, crispr_t query, uint64_t force_pam) {
 void write_output(ostream &stream, crispr_t query, int *summary, targets_t targets, userdata_t *userdata) {
     int onc = min(targets.onc, max_on_list);
     int offc = min(targets.offc, max_off_list);
+    thrust::sort(thrust::host, targets.on, targets.on + onc, thrust::less<uint64_t>());
     thrust::sort(thrust::host, targets.off, targets.off + offc, thrust::less<uint64_t>());
-    if(query.id) {
+    if ( query.id ) {
         stream << query.id;
+    } else if ( onc >= 1 ) {
+        stream << targets.on[0];
     } else {
         char *seq = bits_to_string(query.seq, userdata->metadata.seq_length);
         stream << seq;

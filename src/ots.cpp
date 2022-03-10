@@ -38,6 +38,11 @@ void search(struct mg_connection *c, struct http_message *hm) {
         }
         if ( crisprs[i].id > 0 ) {
             crisprs[i].seq = data->h_crisprs[crisprs[i].id - data->metadata.offset - 1];
+        } else if ( crisprs[i].seq == ERROR_STR ) {
+            const mg_str response = mg_mk_str("Invalid sequence");
+            mg_send_head(c, 400, (int)response.len, "Content-Type: text/plain");
+            mg_printf(c, "%.*s", (int)response.len, response.p);
+            return;
         }
         crisprs[i].rev_seq = revcom(crisprs[i].seq, data->metadata.seq_length);
         do_find_off_targets(results, data, crisprs[i]);

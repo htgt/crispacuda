@@ -19,6 +19,8 @@ $(document).ready(function(){
                 $('#response').text(data);
             },
             dataType: 'text',
+        }).fail(function(err) {
+            $('#response').text(err.responseText);
         });
     });
     $('#sequence').on('submit', function(evt) {
@@ -39,10 +41,10 @@ $(document).ready(function(){
 });
         </script>
     </head>
-    <body><div class="container"><div class="mx-5 text-center">
+    <body><div class="container"><div class="mx-5">
         <h1>Crispacuda</h1>
         <form id="offtargets" class="w-auto mx-auto">
-            <label for="crisprs" class="form-label">Enter some WGE IDs (one per line):</div>
+            <label for="crisprs" class="form-label">Enter some WGE IDs (one per line):</label>
             <textarea id="crisprs" class="form-control" rows="4" cols="80"></textarea><br/>
             <input id="search" class="form-control" type="submit" value="Search"/>
         </form>
@@ -55,8 +57,8 @@ $(document).ready(function(){
                 <option value="2" selected="selected">Either</option>
             </select><br/>
             <label for="seq" class="form-control">Guide:</label>
-            <input type="text" name="seq" class="form-control"></input><br/>
-            <input type="submit" value="Submit" class="form-control"></input>
+            <input type="text" name="seq" class="form-control"/><br/>
+            <input type="submit" value="Submit" class="form-control"/>
         </form>
         <h2>Response</h2>
         <span id="time"></span><br/>
