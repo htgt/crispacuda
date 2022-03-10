@@ -62,6 +62,20 @@ void find_off_targets(uint64_t *crisprs, crispr_t query, int *summary) {
     }
 }
 
+__global__
+void search_by_seq(uint64_t *crisprs, crispr_t query, uint64_t force_pam) {
+    int tid = threadIdx.x;
+    int index = blockIdx.x * blockDim.x + tid;
+    int stride = blockDim.x * gridDim.x;
+    for ( uint64_t j = index; j < d_metadata.num_seqs; j+= stride ) {
+        uint64_t test_crispr = crisprs[j] | force_pam;
+        if ( query.seq == test_crispr || query.rev_seq == test_crispr ) {
+            push_back(j + 1 + d_metadata.offset, 0);
+        }
+    }
+}
+
+
 void write_output(ostream &stream, crispr_t query, int *summary, targets_t targets, userdata_t *userdata) {
     int onc = min(targets.onc, max_on_list);
     int offc = min(targets.offc, max_off_list);
@@ -93,7 +107,7 @@ void write_output(ostream &stream, crispr_t query, int *summary, targets_t targe
     stream << "}" << endl;
 }
 
-void calc_off_targets(ostream &stream, userdata_t *userdata, crispr_t query) {
+void do_find_off_targets(ostream &stream, userdata_t *userdata, crispr_t query) {
     CHECK_CUDA(cudaMemcpyToSymbol(d_metadata, &(userdata->metadata), sizeof(metadata_t)));
     int summary_size = (userdata->options.max_mismatches + 1) * sizeof(int);
     int *summary;
@@ -114,6 +128,27 @@ void calc_off_targets(ostream &stream, userdata_t *userdata, crispr_t query) {
     write_output(stream, query, h_summary, h_targets, userdata);
 
     free(h_summary);
+}
+
+void do_search_by_seq(ostream &stream, userdata_t *userdata, crispr_t query, short pam_right) {
+    CHECK_CUDA(cudaMemcpyToSymbol(d_metadata, &(userdata->metadata), sizeof(metadata_t)));
+    CHECK_CUDA(cudaMemset(p_targets, 0, sizeof(targets_t)));
+    const int blockSize = 128;
+    const int numBlocks = (userdata->metadata.num_seqs + blockSize - 1) / blockSize;
+    uint64_t force_pam = 0;
+    if ( pam_right == 2 ) {
+        force_pam = 0x1ull << userdata->metadata.seq_length * 2;
+        query.seq |= force_pam;
+        query.rev_seq |= force_pam;
+    }
+    search_by_seq<<<numBlocks, blockSize>>>(userdata->d_crisprs, query, force_pam);
+    cudaDeviceSynchronize();
+
+    targets_t h_targets;
+    CHECK_CUDA(cudaMemcpyFromSymbol(&h_targets, targets, sizeof(targets_t), 0, cudaMemcpyDeviceToHost));
+    int onc = min(h_targets.onc, max_on_list);
+    thrust::sort(thrust::host, h_targets.on, h_targets.on + onc, thrust::less<uint64_t>());
+    copy(h_targets.on, h_targets.on + onc, ostream_iterator<uint64_t>(stream, "\n"));
 }
 
 metadata_t load_metadata(FILE *fp) {
@@ -205,7 +240,7 @@ int main(int argc, char *argv[]) {
     CHECK_CUDA(cudaGetSymbolAddress((void **)&p_targets, targets));
 
     for ( int i = 0; i < num_queries; i++ ) {
-        calc_off_targets(cout, &userdata, search.queries[i]);
+        do_find_off_targets(cout, &userdata, search.queries[i]);
     }
     if ( search.port != NULL ) {
         printf("Starting server on port %s...\n", search.port);

@@ -30,4 +30,5 @@ struct userdata_t {
     uint64_t *d_crisprs;
 };
 
-void calc_off_targets(std::ostream &stream, userdata_t *userdata, crispr_t query); 
+void do_find_off_targets(std::ostream &stream, userdata_t *userdata, crispr_t query); 
+void do_search_by_seq(std::ostream &stream, userdata_t *userdata, crispr_t query, short pam_right); 
