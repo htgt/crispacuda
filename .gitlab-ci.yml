@@ -1,0 +1,7 @@
+build_crispacuda:
+  image: nvidia/cuda:11.6.1-cudnn8-devel-ubuntu20.04
+  script:
+    - make crispacuda
+  artifacts:
+    paths:
+      - crispacuda
