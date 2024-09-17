@@ -19,5 +19,17 @@ build_image:
   variables:
     DOCKER_HOST: tcp://thedockerhost:2375/
     DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
   script:
-    - docker build .
+    - docker pull $CI_REGISTRY_IMAGE:${CI_DEFAULT_BRANCH} || true
+    - docker pull $CI_REGISTRY_IMAGE:${CI_COMMIT_BRANCH} || true
+    - docker build
+      --cache-from $CI_REGISTRY_IMAGE:${CI_COMMIT_BRANCH}
+      --cache-from $CI_REGISTRY_IMAGE:${CI_DEFAULT_BRANCH}
+      --tag $CI_REGISTRY_IMAGE:${CI_COMMIT_SHA}
+      --tag $CI_REGISTRY_IMAGE:${CI_COMMIT_BRANCH}
+      .
+    - docker push $CI_REGISTRY_IMAGE:${CI_COMMIT_SHA}
+    - docker push $CI_REGISTRY_IMAGE:${CI_COMMIT_BRANCH}
+
