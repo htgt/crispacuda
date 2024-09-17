@@ -14,4 +14,4 @@ RUN curl -vvv -O https://ftp.sanger.ac.uk/pub/teams/229/crispr_indexes/GRCh38_in
 
 COPY --chmod=0755 crispacuda .
 
-CMD ["/crispacuda", "-i", "GRCh38_index.bin", "-p", "8000"]
+CMD ["/crispacuda", "-i", "/GRCh38_index.bin", "-p", "8000"]
