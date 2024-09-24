@@ -23,7 +23,7 @@ int64_t read_options(int argc, char *argv[], search_t *search, options_t *option
         printf("CRISPACUDA\n");
         printf("Searches for CRISPR off-targets on a GPU\n");
         printf("Usage: crispacuda [options] <ids...>\n");
-        printf("Contact: Joel Rein joel.rein@sanger.ac.uk\n\n");
+        printf("Contact: Cellular Informatics Team wge@sanger.ac.uk\n\n");
         printf("OPTIONS:\n");
         printf("-i <FILE>\n");
         printf("\tSpecify the index file to search. REQUIRED.\n");
